@@ -1,321 +1,230 @@
-# Recipe creation tool - node.js NPM module support plugin
-#
 # Copyright (C) 2016 Intel Corporation
+# Copyright (C) 2019 Savoir-Faire Linux
 #
 # SPDX-License-Identifier: GPL-2.0-only
 #
+"""
+    Recipe creation tool - npm module support plugin
+"""
 
-import os
-import sys
-import logging
-import subprocess
-import tempfile
-import shutil
 import json
-from recipetool.create import RecipeHandler, split_pkg_licenses, handle_license_vars
-
-logger = logging.getLogger('recipetool')
-
+import os
+import re
+import shutil
+import sys
+import tempfile
+import bb
+from bb.fetch2 import runfetchcmd
+from recipetool.create import RecipeHandler
 
 tinfoil = None
 
 def tinfoil_init(instance):
+    """
+        Initialize tinfoil.
+    """
     global tinfoil
     tinfoil = instance
 
-
 class NpmRecipeHandler(RecipeHandler):
-    lockdownpath = None
+    """
+        Class to handle the npm recipe creation
+    """
 
-    def _ensure_npm(self, fixed_setup=False):
+    @staticmethod
+    def _get_registry(extravalues, lines_before):
+        """
+            Get the registry value from the '--npm-registry' option
+            or the 'npm://registry' url.
+        """
+        registry_option = extravalues.get("NPM_REGISTRY")
+
+        registry_fetch = None
+
+        def handle_metadata(name, value, *unused):
+            if name == "SRC_URI":
+                for uri in value.split():
+                    if uri.startswith("npm://"):
+                        nonlocal registry_fetch
+                        registry_fetch = re.sub(r"^npm://", "http://", uri.split(";")[0])
+            return value, None, 0, True
+
+        bb.utils.edit_metadata(lines_before, ["SRC_URI"], handle_metadata)
+
+        if registry_fetch is not None:
+            registry = registry_fetch
+
+            if registry_option is not None:
+                bb.warn("The npm registry is specified multiple times")
+                bb.note("Using registry from the fetch url: '{}'".format(registry))
+                extravalues.pop("NPM_REGISTRY", None)
+
+        elif registry_option is not None:
+            registry = registry_option
+
+        else:
+            registry = "http://registry.npmjs.org"
+
+        return registry
+
+    @staticmethod
+    def _ensure_npm(d):
+        """
+            Check if the 'npm' command is available in the recipes, then build
+            it and add it to the PATH.
+        """
         if not tinfoil.recipes_parsed:
             tinfoil.parse_recipes()
+
         try:
             rd = tinfoil.parse_recipe('nodejs-native')
         except bb.providers.NoProvider:
-            if fixed_setup:
-                msg = 'nodejs-native is required for npm but is not available within this SDK'
-            else:
-                msg = 'nodejs-native is required for npm but is not available - you will likely need to add a layer that provides nodejs'
-            logger.error(msg)
-            return None
+            bb.error("Nothing provides 'nodejs-native' which is required for the build")
+            bb.note("You will likely need to add a layer that provides nodejs")
+            sys.exit(14)
+
         bindir = rd.getVar('STAGING_BINDIR_NATIVE')
         npmpath = os.path.join(bindir, 'npm')
+
         if not os.path.exists(npmpath):
             tinfoil.build_targets('nodejs-native', 'addto_recipe_sysroot')
+
             if not os.path.exists(npmpath):
-                logger.error('npm required to process specified source, but nodejs-native did not seem to populate it')
-                return None
-        return bindir
+                bb.error("Failed to add 'npm' to sysroot")
+                sys.exit(14)
 
-    def _handle_license(self, data):
-        '''
-        Handle the license value from an npm package.json file
-        '''
-        license = None
-        if 'license' in data:
-            license = data['license']
-            if isinstance(license, dict):
-                license = license.get('type', None)
-            if license:
-                if 'OR' in license:
-                    license = license.replace('OR', '|')
-                    license = license.replace('AND', '&')
-                    license = license.replace(' ', '_')
-                    if not license[0] == '(':
-                        license = '(' + license + ')'
-                else:
-                    license = license.replace('AND', '&')
-                    if license[0] == '(':
-                        license = license[1:]
-                    if license[-1] == ')':
-                        license = license[:-1]
-                license = license.replace('MIT/X11', 'MIT')
-                license = license.replace('Public Domain', 'PD')
-                license = license.replace('SEE LICENSE IN EULA',
-                                          'SEE-LICENSE-IN-EULA')
-        return license
+        d.prependVar("PATH", "{}:".format(bindir))
 
-    def _shrinkwrap(self, srctree, localfilesdir, extravalues, lines_before, d):
-        try:
-            runenv = dict(os.environ, PATH=d.getVar('PATH'))
-            bb.process.run('npm shrinkwrap', cwd=srctree, stderr=subprocess.STDOUT, env=runenv, shell=True)
-        except bb.process.ExecutionError as e:
-            logger.warning('npm shrinkwrap failed:\n%s' % e.stdout)
-            return
+    @staticmethod
+    def _run_npm_install(d, development):
+        """
+            Run the 'npm install' command without building the addons (if any).
+            This is only needed to generate the initial shrinkwrap file.
+            The 'node_modules' directory is created and populated.
+        """
+        cmd = "npm install"
+        cmd += " --ignore-scripts"
+        cmd += " --no-shrinkwrap"
+        cmd += d.expand(" --cache=${NPM_CACHE_DIR}")
+        cmd += d.expand(" --registry=${NPM_REGISTRY}")
 
-        tmpfile = os.path.join(localfilesdir, 'npm-shrinkwrap.json')
-        shutil.move(os.path.join(srctree, 'npm-shrinkwrap.json'), tmpfile)
-        extravalues.setdefault('extrafiles', {})
-        extravalues['extrafiles']['npm-shrinkwrap.json'] = tmpfile
-        lines_before.append('NPM_SHRINKWRAP := "${THISDIR}/${PN}/npm-shrinkwrap.json"')
+        if development is None:
+            cmd += " --production"
 
-    def _lockdown(self, srctree, localfilesdir, extravalues, lines_before, d):
-        runenv = dict(os.environ, PATH=d.getVar('PATH'))
-        if not NpmRecipeHandler.lockdownpath:
-            NpmRecipeHandler.lockdownpath = tempfile.mkdtemp('recipetool-npm-lockdown')
-            bb.process.run('npm install lockdown --prefix %s' % NpmRecipeHandler.lockdownpath,
-                           cwd=srctree, stderr=subprocess.STDOUT, env=runenv, shell=True)
-        relockbin = os.path.join(NpmRecipeHandler.lockdownpath, 'node_modules', 'lockdown', 'relock.js')
-        if not os.path.exists(relockbin):
-            logger.warning('Could not find relock.js within lockdown directory; skipping lockdown')
-            return
-        try:
-            bb.process.run('node %s' % relockbin, cwd=srctree, stderr=subprocess.STDOUT, env=runenv, shell=True)
-        except bb.process.ExecutionError as e:
-            logger.warning('lockdown-relock failed:\n%s' % e.stdout)
-            return
+        bb.utils.remove(os.path.join(d.getVar("S"), "node_modules"), recurse=True)
+        runfetchcmd(cmd, d, workdir=d.getVar("S"))
+        bb.utils.remove(d.getVar("NPM_CACHE_DIR"), recurse=True)
 
-        tmpfile = os.path.join(localfilesdir, 'lockdown.json')
-        shutil.move(os.path.join(srctree, 'lockdown.json'), tmpfile)
-        extravalues.setdefault('extrafiles', {})
-        extravalues['extrafiles']['lockdown.json'] = tmpfile
-        lines_before.append('NPM_LOCKDOWN := "${THISDIR}/${PN}/lockdown.json"')
+    @staticmethod
+    def _run_npm_shrinkwrap(d, development):
+        """
+            Run the 'npm shrinkwrap' command to generate the shrinkwrap file.
+        """
+        cmd = "npm shrinkwrap"
 
-    def _handle_dependencies(self, d, deps, optdeps, devdeps, lines_before, srctree):
-        import scriptutils
-        # If this isn't a single module we need to get the dependencies
-        # and add them to SRC_URI
-        def varfunc(varname, origvalue, op, newlines):
-            if varname == 'SRC_URI':
-                if not origvalue.startswith('npm://'):
-                    src_uri = origvalue.split()
-                    deplist = {}
-                    for dep, depver in optdeps.items():
-                        depdata = self.get_npm_data(dep, depver, d)
-                        if self.check_npm_optional_dependency(depdata):
-                            deplist[dep] = depdata
-                    for dep, depver in devdeps.items():
-                        depdata = self.get_npm_data(dep, depver, d)
-                        if self.check_npm_optional_dependency(depdata):
-                            deplist[dep] = depdata
-                    for dep, depver in deps.items():
-                        depdata = self.get_npm_data(dep, depver, d)
-                        deplist[dep] = depdata
+        if development is not None:
+            cmd += " --development"
 
-                    extra_urls = []
-                    for dep, depdata in deplist.items():
-                        version = depdata.get('version', None)
-                        if version:
-                            url = 'npm://registry.npmjs.org;name=%s;version=%s;subdir=node_modules/%s' % (dep, version, dep)
-                            extra_urls.append(url)
-                    if extra_urls:
-                        scriptutils.fetch_url(tinfoil, ' '.join(extra_urls), None, srctree, logger)
-                        src_uri.extend(extra_urls)
-                        return src_uri, None, -1, True
-            return origvalue, None, 0, True
-        updated, newlines = bb.utils.edit_metadata(lines_before, ['SRC_URI'], varfunc)
-        if updated:
-            del lines_before[:]
-            for line in newlines:
-                # Hack to avoid newlines that edit_metadata inserts
-                if line.endswith('\n'):
-                    line = line[:-1]
-                lines_before.append(line)
-        return updated
+        runfetchcmd(cmd, d, workdir=d.getVar("S"))
+
+    def _generate_shrinkwrap(self, d, lines, extravalues, development):
+        """
+            Check and generate the npm-shrinkwrap.json file if needed.
+        """
+        self._ensure_npm(d)
+        self._run_npm_install(d, development)
+
+        # Check if a shinkwrap file is already in the source
+        src_shrinkwrap = os.path.join(d.getVar("S"), "npm-shrinkwrap.json")
+        if os.path.exists(src_shrinkwrap):
+            bb.note("Using the npm-shrinkwrap.json provided in the sources")
+            return src_shrinkwrap
+
+        # Generate the 'npm-shrinkwrap.json' file
+        self._run_npm_shrinkwrap(d, development)
+
+        # Convert the shrinkwrap file and save it in a temporary location
+        tmpdir = tempfile.mkdtemp(prefix="recipetool-npm")
+        tmp_shrinkwrap = os.path.join(tmpdir, "npm-shrinkwrap.json")
+        shutil.move(src_shrinkwrap, tmp_shrinkwrap)
+
+        # Add the shrinkwrap file as 'extrafiles'
+        extravalues.setdefault("extrafiles", {})
+        extravalues["extrafiles"]["npm-shrinkwrap.json"] = tmp_shrinkwrap
+
+        # Add a line in the recipe to handle the shrinkwrap file
+        lines.append("NPM_SHRINKWRAP = \"${THISDIR}/${BPN}/npm-shrinkwrap.json\"")
+
+        # Clean the source tree
+        bb.utils.remove(os.path.join(d.getVar("S"), "node_modules"), recurse=True)
+        bb.utils.remove(src_shrinkwrap)
+
+        return tmp_shrinkwrap
+
+    @staticmethod
+    def _name_from_npm(npm_name, number=False):
+        """
+            Generate a name based on the npm package name.
+        """
+        name = npm_name
+        name = re.sub("/", "-", name)
+        name = name.lower()
+        if not number:
+            name = re.sub(r"[^\-a-z]", "", name)
+        else:
+            name = re.sub(r"[^\-a-z0-9]", "", name)
+        name = name.strip("-")
+        return name
 
     def process(self, srctree, classes, lines_before, lines_after, handled, extravalues):
-        import bb.utils
-        import oe.package
-        from collections import OrderedDict
+        """
+            Handle the npm recipe creation
+        """
 
         if 'buildsystem' in handled:
             return False
 
-        def read_package_json(fn):
-            with open(fn, 'r', errors='surrogateescape') as f:
-                return json.loads(f.read())
+        files = RecipeHandler.checkfiles(srctree, ["package.json"])
 
-        files = RecipeHandler.checkfiles(srctree, ['package.json'])
-        if files:
-            d = bb.data.createCopy(tinfoil.config_data)
-            npm_bindir = self._ensure_npm()
-            if not npm_bindir:
-                sys.exit(14)
-            d.prependVar('PATH', '%s:' % npm_bindir)
+        if not files:
+            return False
 
-            data = read_package_json(files[0])
-            if 'name' in data and 'version' in data:
-                extravalues['PN'] = data['name']
-                extravalues['PV'] = data['version']
-                classes.append('npm')
-                handled.append('buildsystem')
-                if 'description' in data:
-                    extravalues['SUMMARY'] = data['description']
-                if 'homepage' in data:
-                    extravalues['HOMEPAGE'] = data['homepage']
+        with open(files[0], "r") as f:
+            data = json.load(f)
 
-                fetchdev = extravalues['fetchdev'] or None
-                deps, optdeps, devdeps = self.get_npm_package_dependencies(data, fetchdev)
-                self._handle_dependencies(d, deps, optdeps, devdeps, lines_before, srctree)
+        if "name" not in data or "version" not in data:
+            return False
 
-                # Shrinkwrap
-                localfilesdir = tempfile.mkdtemp(prefix='recipetool-npm')
-                self._shrinkwrap(srctree, localfilesdir, extravalues, lines_before, d)
+        # Get the option values
+        development = extravalues.get("NPM_INSTALL_DEV")
+        registry = self._get_registry(extravalues, lines_before)
 
-                # Lockdown
-                self._lockdown(srctree, localfilesdir, extravalues, lines_before, d)
+        # Initialize the npm environment
+        d = bb.data.createCopy(tinfoil.config_data)
+        d.setVar("S", srctree)
+        d.setVar("NPM_REGISTRY", registry)
+        d.setVar("NPM_CACHE_DIR", "${S}/.npm_cache")
 
-                # Split each npm module out to is own package
-                npmpackages = oe.package.npm_split_package_dirs(srctree)
-                licvalues = None
-                for item in handled:
-                    if isinstance(item, tuple):
-                        if item[0] == 'license':
-                            licvalues = item[1]
-                            break
-                if not licvalues:
-                    licvalues = handle_license_vars(srctree, lines_before, handled, extravalues, d)
-                if licvalues:
-                    # Augment the license list with information we have in the packages
-                    licenses = {}
-                    license = self._handle_license(data)
-                    if license:
-                        licenses['${PN}'] = license
-                    for pkgname, pkgitem in npmpackages.items():
-                        _, pdata = pkgitem
-                        license = self._handle_license(pdata)
-                        if license:
-                            licenses[pkgname] = license
-                    # Now write out the package-specific license values
-                    # We need to strip out the json data dicts for this since split_pkg_licenses
-                    # isn't expecting it
-                    packages = OrderedDict((x,y[0]) for x,y in npmpackages.items())
-                    packages['${PN}'] = ''
-                    pkglicenses = split_pkg_licenses(licvalues, packages, lines_after, licenses)
-                    all_licenses = list(set([item.replace('_', ' ') for pkglicense in pkglicenses.values() for item in pkglicense]))
-                    if '&' in all_licenses:
-                        all_licenses.remove('&')
-                    extravalues['LICENSE'] = ' & '.join(all_licenses)
+        # Generate the shrinkwrap file
+        shrinkwrap = self._generate_shrinkwrap(d, lines_before,
+                                               extravalues, development)
 
-                # Need to move S setting after inherit npm
-                for i, line in enumerate(lines_before):
-                    if line.startswith('S ='):
-                        lines_before.pop(i)
-                        lines_after.insert(0, '# Must be set after inherit npm since that itself sets S')
-                        lines_after.insert(1, line)
-                        break
+        extravalues["PN"] = self._name_from_npm(data["name"])
+        extravalues["PV"] = data["version"]
 
-                return True
+        if "description" in data:
+            extravalues["SUMMARY"] = data["description"]
 
-        return False
+        if "homepage" in data:
+            extravalues["HOMEPAGE"] = data["homepage"]
 
-    # FIXME this is duplicated from lib/bb/fetch2/npm.py
-    def _parse_view(self, output):
-        '''
-        Parse the output of npm view --json; the last JSON result
-        is assumed to be the one that we're interested in.
-        '''
-        pdata = None
-        outdeps = {}
-        datalines = []
-        bracelevel = 0
-        for line in output.splitlines():
-            if bracelevel:
-                datalines.append(line)
-            elif '{' in line:
-                datalines = []
-                datalines.append(line)
-            bracelevel = bracelevel + line.count('{') - line.count('}')
-        if datalines:
-            pdata = json.loads('\n'.join(datalines))
-        return pdata
+        classes.append("npm")
+        handled.append("buildsystem")
 
-    # FIXME this is effectively duplicated from lib/bb/fetch2/npm.py
-    # (split out from _getdependencies())
-    def get_npm_data(self, pkg, version, d):
-        import bb.fetch2
-        pkgfullname = pkg
-        if version != '*' and not '/' in version:
-            pkgfullname += "@'%s'" % version
-        logger.debug(2, "Calling getdeps on %s" % pkg)
-        runenv = dict(os.environ, PATH=d.getVar('PATH'))
-        fetchcmd = "npm view %s --json" % pkgfullname
-        output, _ = bb.process.run(fetchcmd, stderr=subprocess.STDOUT, env=runenv, shell=True)
-        data = self._parse_view(output)
-        return data
-
-    # FIXME this is effectively duplicated from lib/bb/fetch2/npm.py
-    # (split out from _getdependencies())
-    def get_npm_package_dependencies(self, pdata, fetchdev):
-        dependencies = pdata.get('dependencies', {})
-        optionalDependencies = pdata.get('optionalDependencies', {})
-        dependencies.update(optionalDependencies)
-        if fetchdev:
-            devDependencies = pdata.get('devDependencies', {})
-            dependencies.update(devDependencies)
-        else:
-            devDependencies = {}
-        depsfound = {}
-        optdepsfound = {}
-        devdepsfound = {}
-        for dep in dependencies:
-            if dep in optionalDependencies:
-                optdepsfound[dep] = dependencies[dep]
-            elif dep in devDependencies:
-                devdepsfound[dep] = dependencies[dep]
-            else:
-                depsfound[dep] = dependencies[dep]
-        return depsfound, optdepsfound, devdepsfound
-
-    # FIXME this is effectively duplicated from lib/bb/fetch2/npm.py
-    # (split out from _getdependencies())
-    def check_npm_optional_dependency(self, pdata):
-        pkg_os = pdata.get('os', None)
-        if pkg_os:
-            if not isinstance(pkg_os, list):
-                pkg_os = [pkg_os]
-            blacklist = False
-            for item in pkg_os:
-                if item.startswith('!'):
-                    blacklist = True
-                    break
-            if (not blacklist and 'linux' not in pkg_os) or '!linux' in pkg_os:
-                pkg = pdata.get('name', 'Unnamed package')
-                logger.debug(2, "Skipping %s since it's incompatible with Linux" % pkg)
-                return False
         return True
 
-
 def register_recipe_handlers(handlers):
+    """
+        Register the npm handler
+    """
     handlers.append((NpmRecipeHandler(), 60))

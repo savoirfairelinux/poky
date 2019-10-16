@@ -262,14 +262,11 @@ def add(args, config, basepath, workspace):
                 f.write('}\n')
 
             if bb.data.inherits_class('npm', rd):
-                f.write('do_install_append() {\n')
-                f.write('    # Remove files added to source dir by devtool/externalsrc\n')
-                f.write('    rm -f ${NPM_INSTALLDIR}/singletask.lock\n')
-                f.write('    rm -rf ${NPM_INSTALLDIR}/.git\n')
-                f.write('    rm -rf ${NPM_INSTALLDIR}/oe-local-files\n')
-                f.write('    for symlink in ${EXTERNALSRC_SYMLINKS} ; do\n')
-                f.write('        rm -f ${NPM_INSTALLDIR}/${symlink%%:*}\n')
-                f.write('    done\n')
+                f.write('do_compile_append() {\n')
+                f.write('    rm -rf ${B}/lib/node_modules/*/.git\n')
+                f.write('    rm -rf ${B}/lib/node_modules/@*/*/.git\n')
+                f.write('    rm -f ${B}/lib/node_modules/*/singletask.lock\n')
+                f.write('    rm -f ${B}/lib/node_modules/@*/*/singletask.lock\n')
                 f.write('}\n')
 
         # Check if the new layer provides recipes whose priorities have been

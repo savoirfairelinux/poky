@@ -833,6 +833,8 @@ def create_recipe(args):
         elif line.startswith('SRC_URI = '):
             if realpv and not pv_srcpv:
                 line = line.replace(realpv, '${PV}')
+            if scheme == 'npm':
+                line = line.replace('version=latest', 'version=${PV}')
         elif line.startswith('PV = '):
             if realpv:
                 # Replace the first part of the PV value

@@ -2008,3 +2008,106 @@ class GitLfsTest(FetcherTest):
         ud.method._find_git_lfs = lambda d: False
         shutil.rmtree(self.gitdir, ignore_errors=True)
         fetcher.unpack(self.d.getVar('WORKDIR'))
+
+class NPMTest(FetcherTest):
+    def skipIfNoNpm():
+        import shutil
+        if not shutil.which('npm'):
+            return unittest.skip('npm not installed, tests being skipped')
+        return lambda f: f
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/node-server-example;version=1.0.0'
+        fetcher = bb.fetch.Fetch([url], self.d)
+        fetcher.download()
+        fetcher.unpack(self.unpackdir)
+        unpackdir = os.path.join(self.unpackdir, 'npm')
+        self.assertTrue(os.path.exists(os.path.join(unpackdir, 'package.json')))
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_no_network_no_tarball(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/node-server-example;version=1.0.0'
+        self.d.setVar('BB_NO_NETWORK', '1')
+        fetcher = bb.fetch.Fetch([url], self.d)
+        with self.assertRaises(bb.fetch2.NetworkAccess):
+            fetcher.download()
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_no_network_with_tarball(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/node-server-example;version=1.0.0'
+        fetcher = bb.fetch.Fetch([url], self.d)
+        fetcher.download()
+        self.d.setVar('BB_NO_NETWORK', '1')
+        fetcher = bb.fetch.Fetch([url], self.d)
+        fetcher.download()
+        fetcher.unpack(self.unpackdir)
+        unpackdir = os.path.join(self.unpackdir, 'npm')
+        self.assertTrue(os.path.exists(os.path.join(unpackdir, 'package.json')))
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_registry_alternate(self):
+        url = 'npm://registry.freajs.org;name=@savoirfairelinux/node-server-example;version=1.0.0'
+        fetcher = bb.fetch.Fetch([url], self.d)
+        fetcher.download()
+        fetcher.unpack(self.unpackdir)
+        unpackdir = os.path.join(self.unpackdir, 'npm')
+        self.assertTrue(os.path.exists(os.path.join(unpackdir, 'package.json')))
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_version_latest(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/node-server-example;version=latest'
+        fetcher = bb.fetch.Fetch([url], self.d)
+        fetcher.download()
+        fetcher.unpack(self.unpackdir)
+        unpackdir = os.path.join(self.unpackdir, 'npm')
+        self.assertTrue(os.path.exists(os.path.join(unpackdir, 'package.json')))
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_registry_invalid(self):
+        url = 'npm://registry.invalid.org;name=@savoirfairelinux/node-server-example;version=1.0.0'
+        fetcher = bb.fetch.Fetch([url], self.d)
+        with self.assertRaises(bb.fetch2.FetchError):
+            fetcher.download()
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_name_invalid(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/invalid;version=1.0.0'
+        fetcher = bb.fetch.Fetch([url], self.d)
+        with self.assertRaises(bb.fetch2.FetchError):
+            fetcher.download()
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_version_invalid(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/node-server-example;version=invalid'
+        with self.assertRaises(bb.fetch2.ParameterError):
+            fetcher = bb.fetch.Fetch([url], self.d)
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_registry_none(self):
+        url = 'npm://;name=@savoirfairelinux/node-server-example;version=1.0.0'
+        with self.assertRaises(bb.fetch2.MalformedUrl):
+            fetcher = bb.fetch.Fetch([url], self.d)
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_name_none(self):
+        url = 'npm://registry.npmjs.org;version=1.0.0'
+        with self.assertRaises(AttributeError):
+            fetcher = bb.fetch.Fetch([url], self.d)
+
+    @skipIfNoNpm()
+    @skipIfNoNetwork()
+    def test_npm_version_none(self):
+        url = 'npm://registry.npmjs.org;name=@savoirfairelinux/node-server-example'
+        with self.assertRaises(AttributeError):
+            fetcher = bb.fetch.Fetch([url], self.d)

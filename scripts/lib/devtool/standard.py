@@ -262,6 +262,7 @@ def add(args, config, basepath, workspace):
                 f.write('}\n')
 
             if bb.data.inherits_class('npm', rd):
+                f.write('NPM_CACHE_DIR = "${S}/.npm_cache"\n')
                 f.write('exclude_git() {\n')
                 f.write('    local exclude="${S}/.git/info/exclude"\n')
                 f.write('    if [ -f "${exclude}" ] && ! grep -q "${1}" "${exclude}" ; then\n')
@@ -269,6 +270,7 @@ def add(args, config, basepath, workspace):
                 f.write('    fi\n')
                 f.write('}\n')
                 f.write('do_compile_append() {\n')
+                f.write('    exclude_git "/.npm_cache"\n')
                 f.write('    exclude_git "/node_modules"\n')
                 f.write('    rm -rf ${B}/lib/node_modules/*/.git\n')
                 f.write('    rm -rf ${B}/lib/node_modules/@*/*/.git\n')

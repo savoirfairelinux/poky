@@ -46,6 +46,33 @@ class Npm(FetchMethod):
         """
         return ud.type in ['npm']
 
+    @staticmethod
+    def _is_semver(version):
+        """
+            Is the version string following the semver semantic?
+
+            https://semver.org/spec/v2.0.0.html
+        """
+        regex = re.compile(
+        r"""
+        ^
+        (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)
+        (?:-(
+            (?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)
+            (?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*
+        ))?
+        (?:\+(
+            [0-9a-zA-Z-]+
+            (?:\.[0-9a-zA-Z-]+)*
+        ))?
+        $
+        """, re.VERBOSE)
+
+        if regex.match(version) is None:
+            return False
+
+        return True
+
     def urldata_init(self, ud, d):
         """
             Init npm specific variables within url data
@@ -64,6 +91,9 @@ class Npm(FetchMethod):
 
         if not ud.version:
             raise MissingParameterError("Parameter 'version' required", ud.url)
+
+        if not self._is_semver(ud.version) and not ud.version == "latest":
+            raise ParameterError("Parameter 'version' is invalid", ud.url)
 
         # Get the 'registry' part of the url
         registry = re.sub(r"^npm://", "", ud.url.split(";")[0])
@@ -95,6 +125,18 @@ class Npm(FetchMethod):
             ud.basecmd += " --timeout=30"
             ud.basecmd += " --passive-ftp"
             ud.basecmd += " --no-check-certificate"
+
+    def need_update(self, ud, d):
+        """
+            Force a fetch, even if localpath exists?
+        """
+        if ud.version == "latest":
+            return True
+
+        if os.path.exists(ud.localpath):
+            return False
+
+        return True
 
     @staticmethod
     def _run_npm_view(ud, d):
@@ -157,6 +199,14 @@ class Npm(FetchMethod):
         uri = URI(view.get("dist", {}).get("tarball"))
         integrity = view.get("dist", {}).get("integrity")
         shasum = view.get("dist", {}).get("shasum")
+
+        # Check if version is valid
+        if ud.version == "latest":
+            bb.warn("The npm package '{}' is using the latest version " \
+                    "available. This could lead to non-reproducible " \
+                    "builds.".format(ud.name))
+        elif ud.version != view.get("version"):
+            raise ParameterError("Parameter 'version' is invalid", ud.url)
 
         cmd = ud.basecmd
 

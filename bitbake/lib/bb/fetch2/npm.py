@@ -329,6 +329,8 @@ def unpack_dependencies(d, shrinkwrap_file=None):
 
     def cache_dependency(tarball):
         cmd = "npm cache add '{}'".format(tarball)
+        cmd += " --offline"
+        cmd += " --proxy=http://invalid.org"
         cmd += d.expand(" --cache=${NPM_CACHE_DIR}")
         runfetchcmd(cmd, d)
 

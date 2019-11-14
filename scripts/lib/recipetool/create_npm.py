@@ -7,15 +7,17 @@
     Recipe creation tool - npm module support plugin
 """
 
+import base64
+import copy
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 import bb
 from bb.fetch2 import runfetchcmd
 from bb.fetch2.npm import fetch_dependencies
+from bb.fetch2.npm import fetch_dependency
 from bb.fetch2.npm import foreach_dependencies
 from bb.fetch2.npm import unpack_dependencies
 from recipetool.create import RecipeHandler
@@ -132,6 +134,47 @@ class NpmRecipeHandler(RecipeHandler):
 
         runfetchcmd(cmd, d, workdir=d.getVar("S"))
 
+    @staticmethod
+    def _convert_shrinkwrap(d, src_shrinkwrap, dst_shrinkwrap):
+        """
+            When adding local tarball to the npm cache, only the sha512
+            algorithm is used to create the cache metadata. The shrinkwrap file
+            must be converted to use only sha512 integrity to be able to
+            retrieve dependencies from the npm cache.
+        """
+
+        def sha512_integrity(name, version):
+            tarball = fetch_dependency(d, name, version)
+            sha512 = bb.utils.sha512_file(tarball)
+            return "sha512-" + base64.b64encode(bytes.fromhex(sha512)).decode()
+
+        def convert_deps(src):
+            if src is None:
+                return None
+            dst = copy.deepcopy(src)
+            for name in src:
+                version = src[name].get("version")
+                integrity = src[name].get("integrity")
+                if integrity is not None and not integrity.startswith("sha512"):
+                    dst[name]["integrity"] = sha512_integrity(name, version)
+                deps = src[name].get("dependencies")
+                if deps is not None:
+                    dst[name]["dependencies"] = convert_deps(deps)
+            return dst
+
+        def convert(src):
+            dst = copy.deepcopy(src)
+            deps = src.get("dependencies")
+            if deps is not None:
+                dst["dependencies"] = convert_deps(deps)
+            return dst
+
+        with open(src_shrinkwrap, "r") as f:
+            src = json.load(f)
+
+        with open(dst_shrinkwrap, "w") as f:
+            print(json.dumps(convert(src), indent=2), file=f)
+
     def _generate_shrinkwrap(self, d, lines, extravalues, development):
         """
             Check and generate the npm-shrinkwrap.json file if needed.
@@ -151,7 +194,7 @@ class NpmRecipeHandler(RecipeHandler):
         # Convert the shrinkwrap file and save it in a temporary location
         tmpdir = tempfile.mkdtemp(prefix="recipetool-npm")
         tmp_shrinkwrap = os.path.join(tmpdir, "npm-shrinkwrap.json")
-        shutil.move(src_shrinkwrap, tmp_shrinkwrap)
+        self._convert_shrinkwrap(d, src_shrinkwrap, tmp_shrinkwrap)
 
         # Add the shrinkwrap file as 'extrafiles'
         extravalues.setdefault("extrafiles", {})

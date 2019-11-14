@@ -243,3 +243,98 @@ class Npm(FetchMethod):
         cmd += " --no-same-owner"
         cmd += " --transform 's:^package/:npm/:'"
         runfetchcmd(cmd, d, workdir=rootdir)
+
+def _parse_shrinkwrap(d, shrinkwrap_file=None):
+    """
+        Find and parse the shrinkwrap file to use.
+    """
+
+    def get_shrinkwrap_file(d):
+        src_shrinkwrap = d.expand("${S}/npm-shrinkwrap.json")
+        npm_shrinkwrap = d.getVar("NPM_SHRINKWRAP")
+
+        if os.path.exists(src_shrinkwrap):
+            bb.note("Using the npm-shrinkwrap.json provided in the sources")
+            return src_shrinkwrap
+        elif os.path.exists(npm_shrinkwrap):
+            return npm_shrinkwrap
+
+        bb.fatal("No mandatory NPM_SHRINKWRAP file found")
+
+    if shrinkwrap_file is None:
+        shrinkwrap_file = get_shrinkwrap_file(d)
+
+    with open(shrinkwrap_file, "r") as f:
+        shrinkwrap = json.load(f)
+
+    return shrinkwrap
+
+def foreach_dependencies(d, callback=None, shrinkwrap_file=None):
+    """
+        Run a callback for each dependencies of a shrinkwrap file.
+        The callback is using the format:
+            callback(name, version, deptree)
+        with:
+            name = the packet name (string)
+            version = the packet version (string)
+            deptree = the package dependency tree (array of strings)
+    """
+    shrinkwrap = _parse_shrinkwrap(d, shrinkwrap_file)
+
+    def walk_deps(deps, deptree):
+        out = []
+
+        for name in deps:
+            version = deps[name]["version"]
+            subtree = [*deptree, name]
+            out.extend(walk_deps(deps[name].get("dependencies", {}), subtree))
+            if callback is not None:
+                out.append(callback(name, version, subtree))
+
+        return out
+
+    return walk_deps(shrinkwrap.get("dependencies", {}), [])
+
+def _get_url(d, name, version):
+    registry = re.sub(r"https?://", "npm://", d.getVar("NPM_REGISTRY"))
+    url = "{};name={};version={}".format(registry, name, version)
+    return url
+
+def fetch_dependency(d, name, version):
+    """
+        Fetch a dependency and return the tarball path.
+    """
+    url = _get_url(d, name, version)
+    fetcher = bb.fetch2.Fetch([url], d)
+    fetcher.download()
+    return fetcher.localpath(url)
+
+def fetch_dependencies(d, shrinkwrap_file=None):
+    """
+        Fetch all dependencies of a shrinkwrap file.
+    """
+
+    def handle_dependency(name, version, *unused):
+        fetch_dependency(d, name, version)
+
+    foreach_dependencies(d, handle_dependency, shrinkwrap_file)
+
+def unpack_dependencies(d, shrinkwrap_file=None):
+    """
+        Unpack all dependencies of a shrinkwrap file. The dependencies are
+        unpacked in the source tree and added to the npm cache.
+    """
+    bb.utils.remove(d.getVar("NPM_CACHE_DIR"), recurse=True)
+
+    def cache_dependency(tarball):
+        cmd = "npm cache add '{}'".format(tarball)
+        cmd += d.expand(" --cache=${NPM_CACHE_DIR}")
+        runfetchcmd(cmd, d)
+
+    def handle_dependency(name, version, *unused):
+        url = _get_url(d, name, version)
+        fetcher = bb.fetch2.Fetch([url], d)
+        tarball = fetcher.localpath(url)
+        cache_dependency(tarball)
+
+    foreach_dependencies(d, handle_dependency, shrinkwrap_file)

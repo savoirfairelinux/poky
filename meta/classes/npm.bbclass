@@ -48,6 +48,25 @@ NPM_CACHE_DIR ?= "${WORKDIR}/npm_cache"
 
 B = "${WORKDIR}/build"
 
+python do_fetch_append() {
+    """
+        Fetch all dependencies tarball to DL_DIR.
+    """
+    bb.fetch2.npm.fetch_dependencies(d)
+}
+
+python do_unpack_append() {
+    """
+        Unpack all dependencies tarball to the 'node_modules' directory and add
+        them to the npm cache. The dependencies needs to be unpacked to have
+        access to the licenses files checksum feature (LIC_FILES_CHKSUM). They
+        also have to be in the cache to properly execute the 'npm install'.
+    """
+    bb.fetch2.npm.unpack_dependencies(d)
+}
+
+do_unpack[depends] = "nodejs-native:do_populate_sysroot"
+
 npm_install_shrinkwrap() {
     # This function ensures that there is a shrinkwrap file in the specified
     # directory. A shrinkwrap file is mandatory to have reproducible builds.

@@ -123,7 +123,10 @@ npm_do_compile() {
     local NPM_INSTALL_GYP_ARGS="${NPM_INSTALL_GYP_ARGS} --release"
     local NPM_INSTALL_GYP_ARGS="${NPM_INSTALL_GYP_ARGS} --nodedir=${RECIPE_SYSROOT_NATIVE}${prefix_native}"
 
+    local NPM_INSTALL_GYP_BUILD_ARGS="${NPM_INSTALL_GYP_BUILD_ARGS} --build-from-source"
+
     cd ${WORKDIR} && npm install ${NPM_PACK_FILE} \
+        ${NPM_INSTALL_GYP_BUILD_ARGS} \
         ${NPM_INSTALL_GYP_ARGS} \
         ${NPM_INSTALL_ARGS}
 }

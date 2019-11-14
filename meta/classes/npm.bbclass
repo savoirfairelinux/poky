@@ -121,6 +121,7 @@ npm_do_compile() {
     local NPM_INSTALL_GYP_ARGS="${NPM_INSTALL_GYP_ARGS} --arch=${NPM_ARCH}"
     local NPM_INSTALL_GYP_ARGS="${NPM_INSTALL_GYP_ARGS} --target_arch=${NPM_ARCH}"
     local NPM_INSTALL_GYP_ARGS="${NPM_INSTALL_GYP_ARGS} --release"
+    local NPM_INSTALL_GYP_ARGS="${NPM_INSTALL_GYP_ARGS} --nodedir=${RECIPE_SYSROOT_NATIVE}${prefix_native}"
 
     cd ${WORKDIR} && npm install ${NPM_PACK_FILE} \
         ${NPM_INSTALL_GYP_ARGS} \

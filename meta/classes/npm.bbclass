@@ -97,7 +97,7 @@ npm_do_compile() {
     local NPM_SHRINKWRAP_INSTALLED=$(npm_install_shrinkwrap)
 
     # Then create a tarball from a npm package whose sources must be in ${S}.
-    local NPM_PACK_FILE=$(cd ${WORKDIR} && npm pack ${S}/)
+    local NPM_PACK_FILE=$(cd ${WORKDIR} && npm pack ${S}/ --offline --proxy=http://invalid.org)
 
     # Clean source tree.
     rm -f ${NPM_SHRINKWRAP_INSTALLED}
@@ -106,6 +106,8 @@ npm_do_compile() {
     rm -rf ${B}
 
     # Finally install and build the tarball package in ${B}.
+    local NPM_INSTALL_ARGS="${NPM_INSTALL_ARGS} --offline"
+    local NPM_INSTALL_ARGS="${NPM_INSTALL_ARGS} --proxy=http://invalid.org"
     local NPM_INSTALL_ARGS="${NPM_INSTALL_ARGS} --cache=${NPM_CACHE_DIR}"
     local NPM_INSTALL_ARGS="${NPM_INSTALL_ARGS} --loglevel=silly"
     local NPM_INSTALL_ARGS="${NPM_INSTALL_ARGS} --prefix=${B}"

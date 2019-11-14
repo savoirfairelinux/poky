@@ -15,7 +15,12 @@ import sys
 import tempfile
 import bb
 from bb.fetch2 import runfetchcmd
+from bb.fetch2.npm import fetch_dependencies
+from bb.fetch2.npm import foreach_dependencies
+from bb.fetch2.npm import unpack_dependencies
 from recipetool.create import RecipeHandler
+from recipetool.create import guess_license
+from recipetool.create import split_pkg_licenses
 
 tinfoil = None
 
@@ -176,6 +181,43 @@ class NpmRecipeHandler(RecipeHandler):
         name = name.strip("-")
         return name
 
+    def _handle_licenses(self, d, shrinkwrap_file, lines, extravalues):
+        """
+            This function have 2 goals:
+                - Add all the package.json files as license files.
+                - Split the license into sub packages.
+        """
+
+        lic_files_chksum = []
+        packages = {}
+
+        def lic_files_chksum_append(licfile):
+            licfilepath = os.path.join(d.getVar("S"), licfile)
+            licmd5 = bb.utils.md5_file(licfilepath)
+            lic_files_chksum.append("file://{};md5={}".format(licfile, licmd5))
+
+        # Handle the parent package
+        lic_files_chksum_append("package.json")
+        packages["${PN}"] = ""
+
+        # Handle the dependencies
+        def handle_dependency(name, version, deptree):
+            prefix = "-".join([self._name_from_npm(x, number=True) for x in deptree])
+            relpath = os.path.join(*[os.path.join("node_modules", x) for x in deptree])
+            lic_files_chksum_append(os.path.join(relpath, "package.json"))
+            packages["${PN}-" + prefix] = relpath
+
+        foreach_dependencies(d, handle_dependency, shrinkwrap_file)
+
+        # Add the extra package.json license files. They will be handled by
+        # the handle_license_vars() function later.
+        extravalues["LIC_FILES_CHKSUM"] = lic_files_chksum
+
+        # Split the license into sub packages. The global LICENSE will be
+        # processed by the handle_license_vars() function later.
+        licvalues = guess_license(d.getVar("S"), d)
+        split_pkg_licenses(licvalues, packages, lines, [])
+
     def process(self, srctree, classes, lines_before, lines_after, handled, extravalues):
         """
             Handle the npm recipe creation
@@ -208,6 +250,13 @@ class NpmRecipeHandler(RecipeHandler):
         # Generate the shrinkwrap file
         shrinkwrap = self._generate_shrinkwrap(d, lines_before,
                                                extravalues, development)
+
+        # Fetch and unpack the dependencies
+        fetch_dependencies(d, shrinkwrap)
+        unpack_dependencies(d, shrinkwrap)
+
+        # Handle the licenses
+        self._handle_licenses(d, shrinkwrap, lines_after, extravalues)
 
         extravalues["PN"] = self._name_from_npm(data["name"])
         extravalues["PV"] = data["version"]

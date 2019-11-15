@@ -325,16 +325,27 @@ def unpack_dependencies(d, shrinkwrap_file=None):
         unpacked in the source tree and added to the npm cache.
     """
     bb.utils.remove(d.getVar("NPM_CACHE_DIR"), recurse=True)
+    bb.utils.remove(d.expand("${S}/node_modules/"), recurse=True)
 
     def cache_dependency(tarball):
         cmd = "npm cache add '{}'".format(tarball)
         cmd += d.expand(" --cache=${NPM_CACHE_DIR}")
         runfetchcmd(cmd, d)
 
-    def handle_dependency(name, version, *unused):
+    def unpack_dependency(tarball, srctree):
+        cmd = "tar --extract --gzip --file='{}'".format(tarball)
+        cmd += " --no-same-owner"
+        cmd += " --transform 's:^package/::'"
+        bb.utils.mkdirhier(srctree)
+        runfetchcmd(cmd, d, workdir=srctree)
+
+    def handle_dependency(name, version, deptree):
         url = _get_url(d, name, version)
         fetcher = bb.fetch2.Fetch([url], d)
         tarball = fetcher.localpath(url)
         cache_dependency(tarball)
+        relpath = os.path.join(*[os.path.join("node_modules", d) for d in deptree])
+        abspath = os.path.join(d.getVar("S"), relpath)
+        unpack_dependency(tarball, abspath)
 
     foreach_dependencies(d, handle_dependency, shrinkwrap_file)

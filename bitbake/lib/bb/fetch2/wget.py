@@ -94,9 +94,9 @@ class Wget(FetchMethod):
         fetchcmd = self.basecmd
 
         if 'downloadfilename' in ud.parm:
-            dldir = d.getVar("DL_DIR")
-            bb.utils.mkdirhier(os.path.dirname(dldir + os.sep + ud.localfile))
-            fetchcmd += " -O " + dldir + os.sep + ud.localfile
+            localpath = os.path.join(d.getVar("DL_DIR"), ud.localfile)
+            bb.utils.mkdirhier(os.path.dirname(localpath))
+            fetchcmd += " -O '%s'" % localpath
 
         if ud.user and ud.pswd:
             fetchcmd += " --user=%s --password=%s --auth-no-challenge" % (ud.user, ud.pswd)

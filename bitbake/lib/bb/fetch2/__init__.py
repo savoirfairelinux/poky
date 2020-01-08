@@ -1564,6 +1564,12 @@ class FetchMethod(object):
         """
         return True
 
+    def try_mirrors(self, fetch, urldata, d, mirrors):
+        """
+        Try to use a mirror
+        """
+        return try_mirrors(fetch, d, urldata, mirrors)
+
     def checkstatus(self, fetch, urldata, d):
         """
         Check the status of a URL
@@ -1679,7 +1685,7 @@ class Fetch(object):
                 elif m.try_premirror(ud, self.d):
                     logger.debug(1, "Trying PREMIRRORS")
                     mirrors = mirror_from_string(self.d.getVar('PREMIRRORS'))
-                    localpath = try_mirrors(self, self.d, ud, mirrors, False)
+                    localpath = m.try_mirrors(self, ud, self.d, mirrors)
                     if localpath:
                         try:
                             # early checksum verification so that if the checksum of the premirror
@@ -1728,7 +1734,7 @@ class Fetch(object):
                             m.clean(ud, self.d)
                         logger.debug(1, "Trying MIRRORS")
                         mirrors = mirror_from_string(self.d.getVar('MIRRORS'))
-                        localpath = try_mirrors(self, self.d, ud, mirrors)
+                        localpath = m.try_mirrors(self, ud, self.d, mirrors)
 
                 if not localpath or ((not os.path.exists(localpath)) and localpath.find("*") == -1):
                     if firsterr:

@@ -1893,6 +1893,7 @@ from . import osc
 from . import repo
 from . import clearcase
 from . import npm
+from . import npmsw
 
 methods.append(local.Local())
 methods.append(wget.Wget())
@@ -1911,3 +1912,4 @@ methods.append(osc.Osc())
 methods.append(repo.Repo())
 methods.append(clearcase.ClearCase())
 methods.append(npm.Npm())
+methods.append(npmsw.NpmShrinkWrap())

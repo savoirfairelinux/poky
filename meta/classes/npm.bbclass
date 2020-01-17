@@ -213,6 +213,7 @@ python npm_do_compile() {
     dev = bb.utils.to_boolean(d.getVar("NPM_INSTALL_DEV"), False)
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        args = []
         configs = []
 
         if dev:
@@ -237,9 +238,13 @@ python npm_do_compile() {
         pythondir = os.path.join(bindir, "python-native", "python")
         configs.append(("python", pythondir))
 
+        # Add node-pre-gyp configuration
+        args.append(("target_arch", d.getVar("NPM_ARCH")))
+        args.append(("build-from-source", "true"))
+
         # Pack and install the main package
         tarball = npm_pack(env, d.getVar("NPM_PACKAGE"), tmpdir)
-        env.run("npm install '%s'" % tarball, configs=configs)
+        env.run("npm install '%s'" % tarball, args=args, configs=configs)
 }
 
 npm_do_install() {
